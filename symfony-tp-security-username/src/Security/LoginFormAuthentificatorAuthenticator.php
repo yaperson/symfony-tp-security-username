@@ -3,22 +3,23 @@
 namespace App\Security;
 
 use App\Entity\User;
+use Psr\Log\LoggerInterface;
 use Doctrine\ORM\EntityManagerInterface;
-use Symfony\Component\HttpFoundation\RedirectResponse;
 use Symfony\Component\HttpFoundation\Request;
-use Symfony\Component\Routing\Generator\UrlGeneratorInterface;
-use Symfony\Component\Security\Core\Authentication\Token\TokenInterface;
-use Symfony\Component\Security\Core\Encoder\UserPasswordEncoderInterface;
-use Symfony\Component\Security\Core\Exception\InvalidCsrfTokenException;
-use Symfony\Component\Security\Core\Exception\UsernameNotFoundException;
 use Symfony\Component\Security\Core\Security;
-use Symfony\Component\Security\Core\User\UserInterface;
-use Symfony\Component\Security\Core\User\UserProviderInterface;
 use Symfony\Component\Security\Csrf\CsrfToken;
-use Symfony\Component\Security\Csrf\CsrfTokenManagerInterface;
-use Symfony\Component\Security\Guard\Authenticator\AbstractFormLoginAuthenticator;
-use Symfony\Component\Security\Guard\PasswordAuthenticatedInterface;
+use Symfony\Contracts\HttpClient\HttpClientInterface;
+use Symfony\Component\HttpFoundation\RedirectResponse;
+use Symfony\Component\Security\Core\User\UserInterface;
 use Symfony\Component\Security\Http\Util\TargetPathTrait;
+use Symfony\Component\Routing\Generator\UrlGeneratorInterface;
+use Symfony\Component\Security\Csrf\CsrfTokenManagerInterface;
+use Symfony\Component\Security\Core\User\UserProviderInterface;
+use Symfony\Component\Security\Guard\PasswordAuthenticatedInterface;
+use Symfony\Component\Security\Core\Authentication\Token\TokenInterface;
+use Symfony\Component\Security\Core\Exception\InvalidCsrfTokenException;
+use Symfony\Component\Security\Core\Encoder\UserPasswordEncoderInterface;
+use Symfony\Component\Security\Guard\Authenticator\AbstractFormLoginAuthenticator;
 
 class LoginFormAuthentificatorAuthenticator extends AbstractFormLoginAuthenticator implements PasswordAuthenticatedInterface
 {
@@ -30,6 +31,24 @@ class LoginFormAuthentificatorAuthenticator extends AbstractFormLoginAuthenticat
     private $urlGenerator;
     private $csrfTokenManager;
     private $passwordEncoder;
+    private $client;
+    private $logger;
+
+    /**
+     * @required
+     */
+    public function setHttpClient(HttpClientInterface $client): void
+    {
+        $this->client = $client;
+    }
+
+    /**
+     * @required
+     */
+    public function setLogger(LoggerInterface $logger): void 
+    {
+        $this->logger = $logger;
+    }
 
     public function __construct(EntityManagerInterface $entityManager, UrlGeneratorInterface $urlGenerator, CsrfTokenManagerInterface $csrfTokenManager, UserPasswordEncoderInterface $passwordEncoder)
     {
@@ -66,11 +85,18 @@ class LoginFormAuthentificatorAuthenticator extends AbstractFormLoginAuthenticat
         if (!$this->csrfTokenManager->isTokenValid($token)) {
             throw new InvalidCsrfTokenException();
         }
+        $username = $credentials['username'];
+        $password = random_bytes(15);
 
-        $user = $this->entityManager->getRepository(User::class)->findOneBy(['username' => $credentials['username']]);
+        $em = $this->entityManager;
+        $user = $em->getRepository(User::class)->findOneBy(['username' => $credentials['username']]);
 
         if (!$user) {
-            throw new UsernameNotFoundException('Username could not be found.');
+            $user = new User();
+            $user->setUsername($username);
+            $user->setPassword($this->passwordEncoder->encodePassword($user, $password));
+            $em->persist($user);
+            $em->flush();
         }
 
         return $user;
@@ -78,7 +104,33 @@ class LoginFormAuthentificatorAuthenticator extends AbstractFormLoginAuthenticat
 
     public function checkCredentials($credentials, UserInterface $user)
     {
-        return $this->passwordEncoder->isPasswordValid($user, $credentials['password']);
+        // $this->logger->info('checkCredentials');
+
+        $this->passwordEncoder->isPasswordValid($user, $credentials['password']);
+
+        $username = $credentials['username'];
+        $password = $credentials['password'];
+        
+        $response = $this->client->request('POST', 'https://api.ecoledirecte.com/v3/login.awp', [
+            'body' => 'data={
+                "identifiant": "' . $username .'",
+                "motdepasse": "'  . urlencode($password) .'"
+            }',
+        ]);
+        $ecoleDirecteResponse = json_decode($response->getContent());
+        $ecoleDirecteCode = $ecoleDirecteResponse->code;
+        $ecoleDirecteEtablissement = $ecoleDirecteResponse->data->accounts[0]->nomEtablissement;
+        $ecoleDirecteNomEleve = $ecoleDirecteResponse->data->accounts[0]->nom;
+        $ecoleDirectePrenomEleve = $ecoleDirecteResponse->data->accounts[0]->prenom;
+        $ecoleDirecteClasseEleve = $ecoleDirecteResponse->data->accounts[0]->profile->classe->libelle;
+        
+        // $this->logger->info("EcoleDirecte : ". print_r($ecoleDirecteResponse, true));
+        $this->logger->info("code : ". $ecoleDirecteCode. " Eleve : ". $ecoleDirecteNomEleve . " " . $ecoleDirectePrenomEleve . " Eleve : ". $ecoleDirecteClasseEleve. " Etablissement: ". $ecoleDirecteEtablissement);
+        if ($ecoleDirecteCode == 200) {
+            return true;
+        } else {
+            $this->logger->warning("erreur de connection !");
+        }
     }
 
     /**

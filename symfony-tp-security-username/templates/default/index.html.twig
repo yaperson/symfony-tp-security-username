@@ -16,5 +16,8 @@
         <li>Your controller at <code><a href="{{ 'C:/Users/legryan/Documents/php/essai3/symfony-tp-security-username/symfony-tp-security-username/src/Controller/DefaultController.php'|file_link(0) }}">src/Controller/DefaultController.php</a></code></li>
         <li>Your template at <code><a href="{{ 'C:/Users/legryan/Documents/php/essai3/symfony-tp-security-username/symfony-tp-security-username/templates/default/index.html.twig'|file_link(0) }}">templates/default/index.html.twig</a></code></li>
     </ul>
+    {% if app.user %}
+        <p>Connecté !</p>
+    {% endif %}
 </div>
 {% endblock %}
